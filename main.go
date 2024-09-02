@@ -18,7 +18,7 @@ func main() {
 
 	runCmd := &cli.Command{
 		Name:  "run",
-		Usage: "create and run server process for NHP protocol",
+		Usage: "create and run echo server",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "a", Value: "", Usage: "listening interface address for the server, leave it empty for all interfaces"},
 			&cli.IntFlag{Name: "p", Value: 57575, Usage: "listening port for the server, default 57575"},
