@@ -8,7 +8,7 @@ import (
 
 	"github.com/urfave/cli/v2"
 
-	"echoserver/server"
+	"github.com/craftleon/echoserver/server"
 )
 
 func main() {
