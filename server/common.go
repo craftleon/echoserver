@@ -10,6 +10,7 @@ import (
 
 const (
 	CONNECTION_IDLE_TIMEOUTMS = 30000
+	MESSAGE_DATA_LENGTH       = 32
 )
 
 var (
@@ -25,12 +26,20 @@ const (
 	UDP_CONN
 )
 
+type MessageData struct {
+	MagicHeader [4]byte
+	Cmd         [4]byte
+	Args        [4]byte
+	Reserved    [4]byte
+	Checksum    [16]byte
+}
+
 type ConnData struct {
 	// atomic data, keep 64bit(8-bytes) alignment for 32-bit system compatibility
-	InitTime           int64 // local connection setup time. immutable after created
+	InitTime           int64 // local connection setup time. fixed after created
 	LastRemoteSendTime int64
-	LastLocalSendTime  int64
 	LastLocalRecvTime  int64
+	echoId             int64
 
 	sync.Mutex
 	sync.WaitGroup
@@ -52,20 +61,27 @@ func (conn *ConnData) Close() {
 		return
 	}
 	conn.nativeConn.Close()
+	close(conn.echoQueue)
 	conn.closed.Store(true)
 }
 
 type TupleData struct {
-	SrcIp     string
-	DstIp     string
-	SrcPort   int
-	DstPort   int
-	Timestamp time.Time
-	msg       string
+	EchoId        int64
+	SrcIp         string
+	DstIp         string
+	SrcPort       int
+	DstPort       int
+	Timestamp     time.Time
+	echoData      []byte
+	serializeOnce sync.Once
+	serializedStr string
 }
 
-func (td *TupleData) String() string {
-	return fmt.Sprintf("%s %s:%d -> %s:%d \"%s\"", td.Timestamp.Format("2006-01-02 15:04:05"), td.SrcIp, td.SrcPort, td.DstIp, td.DstPort, td.msg)
+func (td *TupleData) Serialize() []byte {
+	td.serializeOnce.Do(func() {
+		td.serializedStr = fmt.Sprintf("[%d %s] %s:%d -> %s:%d \"%s\"", td.EchoId, td.Timestamp.Format("2006-01-02 15:04:05"), td.SrcIp, td.SrcPort, td.DstIp, td.DstPort, string(td.echoData))
+	})
+	return []byte(td.serializedStr)
 }
 
 // need external connection

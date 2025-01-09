@@ -87,21 +87,19 @@ func (s *UdpServer) Stop() {
 func (s *UdpServer) recvPacketRoutine() {
 	defer s.wg.Done()
 
+	// allocate a common packet buffer for every read
+	pkt := make([]byte, 65536)
+
 	for {
 		select {
 		case <-s.signals.stop:
 			return
-
 		default:
 		}
 
-		// allocate a new packet buffer for every read
-		pkt := make([]byte, 4096)
-
 		// udp recv, blocking until packet arrives or conn.Close()
-		n, remoteAddr, err := s.listenConn.ReadFromUDP(pkt[:])
+		n, remoteAddr, err := s.listenConn.ReadFromUDP(pkt)
 		if err != nil {
-			pkt = nil
 			//log.Error("Read from UDP error: %v\n", err)
 			if n == 0 {
 				// listenConn closed
@@ -112,9 +110,8 @@ func (s *UdpServer) recvPacketRoutine() {
 		addrStr := remoteAddr.String()
 
 		// add total recv bytes
-		atomic.AddUint64(&s.stats.totalRecvBytes, uint64(n))
-
 		recvTime := time.Now()
+		atomic.AddUint64(&s.stats.totalRecvBytes, uint64(n))
 		//log.Trace("receive udp packet (%s -> %s): %+v", addrStr, s.listenAddr.String(), pkt.Packet)
 		//log.Info("Receive [%s] packet (%s -> %s), %d bytes", msgType, addrStr, s.listenAddr.String(), n)
 
@@ -123,7 +120,8 @@ func (s *UdpServer) recvPacketRoutine() {
 		s.remoteConnectionMapMutex.Unlock()
 
 		tuple := new(TupleData)
-		tuple.msg = string(pkt)
+		tuple.echoData = make([]byte, n)
+		copy(tuple.echoData, pkt[:n])
 		tuple.SrcIp = remoteAddr.IP.String()
 		tuple.SrcPort = remoteAddr.Port
 		tuple.DstIp = ListenIp
@@ -133,8 +131,8 @@ func (s *UdpServer) recvPacketRoutine() {
 		if found {
 			// existing connection
 			atomic.StoreInt64(&conn.LastLocalRecvTime, recvTime.UnixMicro())
+			tuple.EchoId = atomic.AddInt64(&conn.echoId, 1)
 			conn.echoQueue <- tuple
-
 		} else {
 			// create new connection
 			conn = &ConnData{
@@ -144,15 +142,16 @@ func (s *UdpServer) recvPacketRoutine() {
 				nativeConn:    s.listenConn,
 				connType:      UDP_CONN,
 				idleTimeoutMs: CONNECTION_IDLE_TIMEOUTMS,
+				echoQueue:     make(chan *TupleData, 4096),
 			}
-			conn.echoQueue = make(chan *TupleData)
-			// setup new routine for connection
+
+			// record new connection
 			s.remoteConnectionMapMutex.Lock()
 			s.remoteConnectionMap[addrStr] = conn
 			s.remoteConnectionMapMutex.Unlock()
 
+			tuple.EchoId = atomic.AddInt64(&conn.echoId, 1)
 			conn.echoQueue <- tuple
-
 			//log.Info("Accept new UDP connection from %s to %s", addrStr, s.listenAddr.String())
 
 			// launch connection routine
@@ -197,7 +196,8 @@ func (s *UdpServer) connectionRoutine(conn *ConnData) {
 			}
 			//log.Debug("Received udp packet len [%d] from addr: %s\n", len(pkt.Packet), addrStr)
 			conn.nativeConn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
-			conn.nativeConn.Write([]byte(tuple.String()))
+			conn.nativeConn.Write(tuple.Serialize())
+			atomic.AddUint64(&s.stats.totalSendBytes, uint64(len(tuple.serializedStr)))
 		}
 	}
 }
